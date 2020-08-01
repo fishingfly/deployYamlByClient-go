@@ -4,6 +4,10 @@
 克隆仓库&构建镜像
 ```go
 git clone https://github.com/fishingfly/deployYamlByClient-go.git
+cd deployYamlByClient-go
+export GO111MODULE=on 
+export GOPROXY=https://goproxy.io
+go mod vendor
 make build
 make image
 ```
