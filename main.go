@@ -7,6 +7,7 @@ import (
 	"github.com/golang/glog"
 	"io/ioutil"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -143,6 +145,11 @@ func deploy(client *kubernetes.Clientset, files []os.FileInfo, kubeconfig *rest.
 						glog.Errorf("delete  resource error, error is %s\n", err.Error())
 						return err
 					}
+					//删除操作发生后，资源不会立即清理掉，此时创建会存在is being deleting的错误
+					if err = pollGetResource(mapping, dclient, unstruct, namespace); err != nil {
+						glog.Errorf("yaml file is %s, delete  resource error, error is %s\n", v, err.Error())
+						return err
+					}
 					_, err = dclient.Resource(mapping.Resource).Namespace(namespace).Create(&unstruct, metav1.CreateOptions{})
 					if err != nil {
 						glog.Errorf("create  resource error, error is %s\n", err.Error())
@@ -155,4 +162,29 @@ func deploy(client *kubernetes.Clientset, files []os.FileInfo, kubeconfig *rest.
 		}
 	}
 	return nil
+}
+
+func pollGetResource(mapping *meta.RESTMapping, dclient dynamic.Interface, unstruct unstructured.Unstructured, namespace string) error {
+	for {
+		select {
+		case <-time.After(time.Minute * 10):
+			glog.Error("pollGetResource time out, something wrong with k8s resource")
+			return errors.New("ErrWaitTimeout")
+		default:
+			resource, err := dclient.Resource(mapping.Resource).Namespace(namespace).Get(unstruct.GetName(), metav1.GetOptions{})
+			if err != nil {
+				if k8sErrors.IsNotFound(err) {
+					glog.Warningf("kind is %s, namespace is %s, name is %s, this app has been deleted.", unstruct.GetKind(), namespace, unstruct.GetName())
+					return  nil
+				} else {
+					glog.Errorf("get resource failed, error is %s", err.Error())
+					return err
+				}
+			}
+			if resource != nil && resource.GetName() == unstruct.GetName() {// 判断资源存在，或者获取资源报错。
+				glog.Errorf("kind: %s, namespace: %s, name %s still  exists", unstruct.GetKind(), namespace, unstruct.GetName())
+			}
+		}
+		time.Sleep(time.Second * 2)// 2秒循环一次
+	}
 }
